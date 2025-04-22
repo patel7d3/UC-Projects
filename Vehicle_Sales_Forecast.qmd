@@ -1,0 +1,598 @@
+---
+title: "Final_Report"
+author: "Devansh"
+format:
+   html:
+    code-fold: true
+    fig-format: png
+    fig-output: inline
+    embed-resources: true
+editor: visual
+---
+::: {.panel-tabset}
+## Section 1: Exploratory Data Analysis & Time Series Decomposition
+
+### Introduction
+
+The Federal Reserve Economic Data (FRED) tracks U.S. vehicle sales through its "Total Vehicle Sales" (TOTALNSA) dataset, which reports monthly non-seasonally adjusted figures in thousands of units. According to the data, U.S. vehicle sales reached 1,400.688 units in November 2024.
+
+This data comes from the U.S. Bureau of Economic Analysis's Supplemental Estimates on Motor Vehicles. Analysts and researchers use it to study automotive industry patterns and broader economic indicators. A seasonally adjusted version (TOTALSA) is also available, which presents the data in millions of units at an annual rate.
+
+We can access the TOTALNSA data series directly on the FRED website: [Total US Vehicle Sales](https://fred.stlouisfed.org/series/TOTALNSA)
+
+### LIBRARIES REQUIRED
+
+```{r , warning=FALSE, message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(forecast)
+library(patchwork)
+library(zoo)
+library(slider)
+library(dplyr)
+library(tsibble)
+library(fable)
+library(feasts)
+library(forecast)
+library(zoo)
+library(fpp3)
+library(patchwork)
+library(fabletools)
+library(data.table)
+library(fable.prophet)
+library(changepoint)
+```
+
+### Loading the dataset
+
+```{r}
+vs <- read.csv("total_vehicle_sales.csv") %>%
+  mutate(date = tsibble::yearmonth(date)) %>%
+  arrange(date) %>%
+  as_tsibble(index = date) %>%
+  mutate(
+    year = as.integer(format(date, "%Y")),
+    month = as.integer(format(date, "%m"))
+  )
+vs <- vs %>%
+   mutate(log_vehicle_sales = log(vehicle_sales))
+
+```
+
+```{r}
+autoplot(vs, vehicle_sales) + theme_minimal()
+```
+
+### EDA
+
+#### Box-plot of Vechicle Sales by Year
+
+```{r}
+ggplot(vs, aes(x = factor(year), y = vehicle_sales)) +
+  geom_boxplot(fill = "lightcoral", color = "black", outlier.colour = "red") +
+  labs(title = "Boxplot of Vehicle Sales by Year",
+       x = "Year",
+       y = "Vehicle Sales") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+This boxplot shows how vehicle sales vary each year, with the boxes indicating the median and overall spread of sales. The red dots represent outliers that deviate significantly from the main distribution. A cyclical pattern is visible over the years, suggesting recurring peaks and dips in vehicle sales.
+
+#### Box-plot of Vechicle Sales by Month
+
+```{r}
+
+ggplot(vs, aes(x = factor(month), y = vehicle_sales)) +
+  geom_boxplot(fill = "lightcoral", color = "black", outlier.colour = "red") +
+  labs(x = "Month",
+       y = "Vehicle Sales") +
+  theme_minimal()
+```
+This boxplot shows how vehicle sales vary month by month, with each box highlighting the typical range and the dots representing outliers. We can see that sales generally peak around the middle of the year, while early and late months exhibit lower or more variable figures. These patterns suggest a clear seasonal trend in vehicle sales.
+
+```{r}
+# Histogram
+hist_plot <- vs %>%
+  ggplot(aes(x = vehicle_sales)) +
+  ggtitle("Histogram") +
+  geom_histogram(fill = "lightcoral", color = "black", bins = 20) +
+  theme_bw()
+
+# Density Plot
+dens_plot <- vs %>%
+  ggplot(aes(x = vehicle_sales)) +
+  ggtitle("Density Plot") +
+  geom_density(fill = "lightcoral", alpha = 0.6) +
+  theme_bw()
+
+# Boxplot
+box_plot <- vs %>%
+  ggplot(aes(y = vehicle_sales)) +
+  ggtitle("Boxplot") +
+  geom_boxplot(fill = "lightcoral", color = "black", outlier.colour = "red") +
+  theme_bw()
+
+# Combine all plots in one layout
+hist_plot + dens_plot + box_plot
+```
+These three plots illustrate the overall distribution of vehicle sales. The histogram and density plot suggest a single peak, indicating a unimodal distribution centered around the 1100–1300 range. The boxplot shows that the median falls within this region, with a moderate spread and a few potential outliers.
+
+#### Moving average analysis, seasonality assessment, and time series decomposition
+
+```{r}
+vs_ma <- vs %>%
+  arrange(date) %>%
+  mutate(
+    ma_right = slide_dbl(vehicle_sales, mean, .before = 12, .after = 0, .complete = TRUE),
+    ma_left = slide_dbl(vehicle_sales, mean, .before = 0, .after = 12, .complete = TRUE),
+    ma_center = slide_dbl(vehicle_sales, mean, .before = 6, .after = 6, .complete = TRUE),
+    ma_3 = slide_dbl(vehicle_sales, mean, .before = 1, .after = 1, .complete = TRUE),
+    ma_5 = slide_dbl(vehicle_sales, mean, .before = 2, .after = 2, .complete = TRUE),
+    ma_7 = slide_dbl(vehicle_sales, mean, .before = 3, .after = 3, .complete = TRUE),
+    ma_13 = slide_dbl(vehicle_sales, mean, .before = 6, .after = 6, .complete = TRUE),
+    ma_25 = slide_dbl(vehicle_sales, mean, .before = 12, .after = 12, .complete = TRUE),
+    ma_49 = slide_dbl(vehicle_sales, mean, .before = 24, .after = 24, .complete = TRUE)
+  )
+
+vs_ma_pivot <- vs_ma %>%
+  pivot_longer(
+    cols = ma_right:ma_49,
+    values_to = "sales_ma",
+    names_to = "ma_order"
+  ) %>%
+  mutate(ma_order = factor(
+    ma_order,
+    levels = c("ma_center", "ma_left", "ma_right", "ma_3", "ma_5", "ma_7", "ma_13", "ma_25", "ma_49"),
+    labels = c("ma_center", "ma_left", "ma_right", "ma_3", "ma_5", "ma_7", "ma_13", "ma_25", "ma_49")
+  ))
+
+vs_ma %>%
+  ggplot() +
+  # Original data in grey
+  geom_line(aes(date, vehicle_sales), size = 1, alpha = 0.5, color = "grey", na.rm = TRUE) +
+  # 13-month moving average in red
+  geom_line(aes(date, ma_13), linewidth = 1, color = "red", na.rm = TRUE) +
+  # Linear model fit over the original data in blue
+  geom_smooth(aes(date, vehicle_sales), method = "lm", formula = y ~ x, se = FALSE, color = "blue") +
+  theme_bw() +
+  labs(x = "Date", y = "Vehicle Sales")
+
+```
+The 24-month rolling standard deviation of vehicle sales shows periods of increased volatility, particularly around major economic events. The trend line indicates a slight upward movement, suggesting that fluctuations in vehicle sales have become more pronounced over time.
+
+```{r}
+library(lubridate)
+
+vs %>%
+  mutate(
+    year = year(date),
+    month = factor(format(date, "%b"), levels = month.abb)
+  ) %>%
+  ggplot(aes(x = month, y = vehicle_sales, group = year, color = factor(year))) +
+  geom_line() +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  ggtitle("Seasonal Plot of Vehicle Sales") +
+  xlab("Month") +
+  ylab("Vehicle Sales")
+
+
+```
+
+This seasonal plot shows monthly vehicle sales for multiple years, each represented by a different colored line. Most lines peak around mid-year, indicating a recurring seasonal pattern. Although the general shape is consistent, there is noticeable variation in the exact peak levels across different years.
+
+```{r}
+start_year <- year(min(vs$date))
+start_month <- month(min(vs$date))
+
+vs_ts <- ts(vs$vehicle_sales, start = c(start_year, start_month), frequency = 12)
+
+decomp <- decompose(vs_ts, type = "additive")
+
+plot(decomp)
+```
+This decomposition breaks the observed time series into its trend, seasonal, and residual components. The middle panel shows a relatively smooth long-term trend, while the third panel highlights a strong yearly seasonal pattern. The bottom panel captures the random fluctuations not explained by trend or seasonality.
+
+
+```{r, warning=FALSE, message=FALSE}
+vs_tbl <- as_tibble(vs)
+
+# data frame with lagged values for lags 1 through 12
+lags_df <- map_df(1:12, function(lag_val) {
+  vs_tbl %>%
+    arrange(date) %>%
+    mutate(lagged = lag(vehicle_sales, n = lag_val),
+           lag = lag_val)
+})
+
+# Remove rows with NA values due to lagging
+lags_df <- lags_df %>% filter(!is.na(lagged))
+
+
+ggplot(lags_df, aes(x = lagged, y = vehicle_sales)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  facet_wrap(~ lag, scales = "free_x") +
+  theme_minimal() +
+  labs(title = "Lag Plots of Vehicle Sales (Lags 1-12)",
+       x = "Lagged Vehicle Sales",
+       y = "Vehicle Sales")
+```
+These lag plots illustrate how current vehicle sales correlate with sales from previous months (lags 1–12). Each subplot shows a generally positive correlation, indicating that higher sales in one period tend to be followed by higher sales in the next. The strength of this relationship often diminishes as the lag increases, suggesting more immediate past sales have a stronger influence on current figures than those further in the past.
+
+## Section 2: ARIMA Modeling
+
+```{r,warning=FALSE, message=FALSE}
+
+vs_roll <- vs %>%
+  arrange(date) %>%
+  mutate(
+    vehicle_sales_sd = slide_dbl(
+      vehicle_sales, 
+      ~ sd(.x, na.rm = TRUE),
+      .before = 12,
+      .after = 12,
+      .complete = TRUE
+    )
+  )
+
+vs_roll_plot <- vs_roll %>%
+  ggplot(aes(x = date, y = vehicle_sales_sd)) +
+  geom_line() +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  theme_bw() +
+  ggtitle("Vehicle Sales Standard Deviation Over Time (25-Month Rolling Window)") +
+  ylab("Rolling Standard Deviation of Sales") +
+  xlab("Date")
+
+print(vs_roll_plot)
+
+
+```
+The 24-month rolling standard deviation of vehicle sales shows periods of increased volatility, particularly around major economic events. The trend line indicates a slight upward movement, suggesting that fluctuations in vehicle sales have become more pronounced over time.
+
+```{r}
+vs %>%
+  gg_tsdisplay(log_vehicle_sales, plot_type = 'partial', lag = 24) +
+  labs(title = "Log-Transformed U.S. Vehicle Sales", y = "")
+```
+The ACF plot shows significant autocorrelation at multiple lags, indicating that the log-transformed vehicle sales data is still non-stationary. The PACF plot suggests the presence of autoregressive components, implying that differencing may be necessary to achieve stationarity.
+
+#### Logged and Seasonally Differenced U.S. Vehicle Sales
+
+```{r,warning=FALSE, message=FALSE}
+
+vs %>%
+  gg_tsdisplay(difference(log_vehicle_sales, 12), 
+               plot_type = 'partial', 
+               lag = 36) +
+  labs(title = "Logged and Seasonally Differenced U.S. Vehicle Sales", y = "")
+```
+
+The ACF plot shows that most autocorrelations have been reduced after logging and seasonal differencing, indicating improved stationarity. The PACF suggests a significant first lag, supporting the inclusion of an autoregressive term in the ARIMA model. Given the seasonal patterns in vehicle sales, a SARIMA model (Seasonal ARIMA) would be appropriate, as it explicitly accounts for both short-term and seasonal dependencies, improving forecast accuracy.
+
+```{r}
+
+vs %>%
+  features(difference(log_vehicle_sales, 12), unitroot_kpss)
+```
+
+The KPSS test result shows a p-value of 0.1, which is greater than 0.05, indicating that we fail to reject the null hypothesis of stationarity. This suggests that the seasonally differenced log-transformed vehicle sales data is now stationary, making it suitable for ARIMA modeling.
+
+#### Manual Models
+
+```{r, warning=FALSE}
+manual_models <- vs %>%
+  model(
+    m1 = ARIMA(log(vehicle_sales) ~ pdq(1, 0, 1) + PDQ(0, 1, 2)),
+    m2 = ARIMA(log(vehicle_sales) ~ pdq(1, 0, 2) + PDQ(0, 1, 2)),
+    m3 = ARIMA(log(vehicle_sales) ~ pdq(1, 1, 0) + PDQ(0, 1, 2)),
+    m4 = ARIMA(log(vehicle_sales) ~ pdq(2, 0, 2) + PDQ(0, 1, 2)),
+    m5 = ARIMA(log(vehicle_sales) ~ pdq(2, 0, 0) + PDQ(0, 1, 2)),
+    m6 = ARIMA(log(vehicle_sales) ~ pdq(1, 0, 3) + PDQ(0, 1, 2)),
+    m7 = ARIMA(log(vehicle_sales) ~ pdq(1, 0, 2) + PDQ(0, 1, 3)),
+    m8 = ARIMA(log(vehicle_sales) ~ pdq(2, 0, 1) + PDQ(0, 1, 2)),
+    
+  )
+
+report(manual_models)
+```
+
+Based on BIC, Out of these given models, m8 ARIMA(2,0,1)(0,1,2) performs the best which is different given by the automodel ARIMA(1,0,2)(0,1,2)
+
+#### Auto Model
+
+```{r,warning=FALSE}
+auto_mod <- vs %>%
+  model(
+    mod1 = ARIMA(log(vehicle_sales), approximation = FALSE, stepwise = FALSE)
+  )
+
+auto_mod %>%
+  report()
+```
+
+The ARIMA(1,0,2)(0,1,2)\[12\] model, with log transformation, captures both seasonal and short-term patterns in vehicle sales. The low AIC and BIC values indicate a well-fitting model, and the significant coefficients suggest strong dependencies. This will help us to guess the model which will fit better by providing insights into the best combination of AR, MA, and seasonal terms.
+
+```{r}
+
+library(fpp3)
+
+# Fit the m8 model
+m8_fit <- vs %>%
+  model(
+    m8 = ARIMA(log(vehicle_sales) ~ pdq(2, 0, 1) + PDQ(0, 1, 2))
+  )
+
+# Generate the residual diagnostics plot for m8
+m8_fit %>% gg_tsresiduals()
+
+```
+
+The residual diagnostics plot shows that the residuals are randomly scattered, with no clear patterns, indicating a well-fitted model. The ACF plot confirms that there is no significant autocorrelation, and the histogram suggests that the residuals follow a roughly normal distribution.
+
+## Section 3: Meta Prophet Model
+
+#### Introduction
+
+The Facebook Prophet model is a powerful forecasting tool developed by Facebook’s Core Data Science team. It excels at handling time series with pronounced seasonal patterns, gaps, and outliers. Prophet uses an additive regression approach that decomposes the series into trend, seasonality, and holiday effects. It is designed to capture both linear and logistic growth, automatically detecting changepoints where the trend shifts. This makes it particularly effective for forecasting in business and economic settings.
+
+#### Initial Fit
+
+```{r}
+n <- nrow(vs)
+train_index <- floor(0.85 * n)
+vs_train <- vs %>% slice(1:train_index)
+vs_test  <- vs %>% slice((train_index + 1):n)
+
+fit <- vs_train %>%
+  model(prophet = prophet(vehicle_sales))
+
+fc <- fit %>% forecast(h = nrow(vs_test))
+
+autoplot(fc, vs) +
+  ggtitle("Prophet Forecast vs. Actual Vehicle Sales") +
+  xlab("Date") +
+  ylab("Vehicle Sales") +
+  theme_minimal()
+```
+This chart compares the historical vehicle sales (black line) to the Prophet model’s forecast (blue area). The darker and lighter shades represent the 80% and 95% confidence intervals, respectively, illustrating increasing uncertainty over time. Despite capturing an upward trend, the model shows broader prediction bands further into the future.
+
+```{r}
+cp = cpt.mean(vs$vehicle_sales)
+
+print(cp)
+```
+This output indicates that a changepoint analysis (type: change in mean) was performed using the PELT method with an MBIC penalty. The high number of detected changepoints (567) suggests frequent shifts in the mean over the observed period, reflecting substantial variability in the data.
+
+```{r}
+cp <- cpt.meanvar(vs_train$vehicle_sales, method = "PELT")
+
+
+change_dates <- as.Date(vs_train$date[cpts(cp)], frac = 1)
+
+
+vs %>% 
+  ggplot(aes(x = as.Date(date, frac = 1), y = vehicle_sales)) +
+  geom_line() +
+  geom_vline(xintercept = change_dates, color = 'red') +
+  theme_bw() +
+  ylab('Vehicle Sales') +
+  ggtitle("Vehicle Sales with Detected Change Points")
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+mult_cp <- cpt.mean(vs_train$vehicle_sales, method = "BinSeg", Q = 7)
+
+
+vs_train %>%
+  mutate(
+    cp = if_else(
+      date %in% date[cpts(mult_cp)],
+      date,                # if TRUE, keep the date
+      yearmonth(NA)        # otherwise set to NA (or yearmonth(NA))
+    )
+  ) %>%
+  ggplot(aes(x = as.Date(date, frac = 1), y = vehicle_sales)) +
+  geom_line() +
+  geom_vline(aes(xintercept = as.Date(cp, frac = 1)), color = "red") +
+  theme_bw() +
+  labs(
+    x = "Date",
+    y = "Vehicle Sales",
+    title = "Vehicle Sales with Detected Mean Shift Change Points"
+  )
+```
+
+These charts illustrate monthly vehicle sales data with red vertical lines marking detected change points.
+These change points indicate where significant shifts in the time series structure may have occurred.
+Notably, the data exhibit recurring cyclical patterns and multiple shifts over the decades.
+
+
+
+
+```{r}
+model <- vs_train %>%
+  model(
+    additive = prophet(vehicle_sales ~ growth() +
+                        season(period = "year", type = "additive")
+                       ),
+    multiplicative = prophet(vehicle_sales ~ growth() +
+                             season(period = "year", type = "multiplicative")
+                             )
+  )
+
+model %>%
+  components() %>%
+  autoplot() + theme_minimal()
+```
+
+These Prophet decomposition plots compare additive and multiplicative seasonality in vehicle sales.\
+Notice that the multiplicative terms show very small amplitude relative to the overall sales, indicating they’re effectively close to additive.\
+The trend component highlights a gradual increase over time, while the seasonal components capture recurring monthly fluctuations.\
+Based on these findings (as seen in Assignment 2), an additive model appears most appropriate for this dataset.
+
+Because the dataset is at monthly granularity, daily and weekly patterns cannot be extracted. Prophet cannot infer sub-monthly seasonality from monthly observations.
+
+```{r}
+model %>%
+forecast(h=90) %>%
+autoplot(vs_test,level=NULL) + theme_minimal()
+```
+This chart compares actual vehicle sales (black) with two forecasting models: an additive model (red) and a multiplicative model (blue). Given the data’s additive seasonality, the additive model tends to handle seasonal effects more consistently across different sales levels. The multiplicative model, in contrast, scales seasonal fluctuations relative to the sales volume, which can over-amplify peaks and troughs. As a result, the additive approach may offer a more stable fit in this scenario.
+
+## Section 4: Model Comparison  & Validation
+
+```{r}
+cv_folds <- vs %>%
+  stretch_tsibble(.init = 513,
+                  .step = 13)
+
+
+cv_folds %>%
+  ggplot() +
+  geom_point(aes(
+    x = as.Date(date, frac = 1),
+    y = factor(.id),
+    color = factor(.id)
+  )) +
+  ylab("Iteration") +
+  ggtitle("Samples Included in Each Rolling-Origin CV Iteration") +
+  theme_minimal()
+```
+This chart illustrates how the dataset is split across multiple rolling-origin cross-validation iterations. Each colored bar represents the time window used in a particular iteration, shifting forward in time to mimic real-world forecasting scenarios.
+
+
+```{r}
+#| fig-width: 12
+#| fig-height: 8
+
+
+cv_forecasts <- cv_folds %>%
+  model(
+    # ARIMA with explicit seasonal period for monthly data
+    arima = ARIMA(vehicle_sales ~ pdq(2, 0, 1) + PDQ(0, 1, 2, period = 12)),
+    
+    # Seasonal Naive with 12-month lag
+    naive = SNAIVE(vehicle_sales ~ lag("year")),
+    
+    # Prophet with annual (12-month) seasonality
+    additive_prophet = fable.prophet::prophet(
+      vehicle_sales ~ growth() +
+        season(period = 12, type = "additive")
+    )
+  ) %>%
+  forecast(h = 12)
+
+# Visualize actual vs. predicted values for each fold
+cv_forecasts %>%
+  autoplot(cv_folds) +
+  facet_wrap(~.id, nrow = 3) +
+  theme_bw() +
+  labs(
+    y = "Log(Vehicle Sales)",
+    title = "CV Forecasts: Actual vs. Predicted"
+  )
+```
+These panels show rolling-origin cross-validation forecasts (colored lines) compared to actual sales (black lines) across six iterations. The models—additive Prophet, ARIMA, and Naïve—each exhibit different degrees of alignment with observed data. Overall, Prophet and ARIMA appear to capture seasonal patterns more effectively than the simpler Naïve approach. The shaded regions represent the 80% and 95% forecast intervals, indicating uncertainty around the predictions.
+
+```{r}
+
+cv_forecasts_tibble <- cv_forecasts %>%
+  as_tibble() %>%
+  mutate(date = as.Date(date, frac = 1))
+
+vs_train_tibble <- vs_train %>%
+  mutate(date = as.Date(date, frac = 1))
+
+vs_test_tibble <- vs_test %>%
+  mutate(date = as.Date(date, frac = 1))
+
+
+ggplot() +
+  geom_line(
+    data = cv_forecasts_tibble,
+    aes(x = date, y = .mean, color = factor(.id), linetype = .model),
+    size = 0.8
+  ) +
+  geom_line(
+    data = vs_test_tibble,
+    aes(x = date, y = vehicle_sales),
+    color = "black",  # Adjust color as needed for clarity
+    size = 0.8
+  ) +
+  scale_color_discrete(name = "Iteration") +
+  labs(
+    x = "Date",
+    y = "Vehicle Sales",
+    title = "CV Forecasts and vs_test Actual Vehicle Sales"
+  ) +
+  theme_bw()
+```
+This plot compares the actual vehicle sales (black line) with forecasted values across six cross-validation iterations, each color-coded differently. The dotted lines represent predictions from additive Prophet, ARIMA, and a naive model. While all models capture some degree of seasonal variation, ARIMA provides the most accurate forecasts overall based on RMSE. Prophet still follows the general trend, while the naive approach lags behind in terms of precision.
+
+
+```{r, warning=FALSE}
+cv_accuracy <- cv_forecasts %>%
+  accuracy(vs_test)
+
+glimpse(cv_accuracy)
+```
+
+These metrics compare the forecast performance of three models: additive_prophet, arima, and naive.\
+We can notice that arima has the lowest RMSE and MAE, indicating better overall accuracy than the other two models.\
+Meanwhile, the MPE values show each model’s tendency to over- or under-forecast, which can be crucial for decision-making.
+
+```{r, warning=FALSE}
+cv_forecasts <- cv_forecasts %>%
+  as_tsibble(key = c(.id, .model), index = date)
+
+cv_forecasts %>%
+  group_by(.id, .model) %>%
+  mutate(h = row_number()) %>%  # Create a forecasting horizon variable
+  ungroup() %>%
+  as_fable(response = "vehicle_sales", distribution = vehicle_sales) %>%
+  accuracy(vs_test, by = c("h", ".model")) %>%
+  ggplot(aes(x = h, y = RMSE, color = .model)) +
+  geom_point() +
+  geom_line() +
+  theme_bw() +
+  ggtitle("RMSE at Different Intervals") +
+  ylab("Average RMSE") +
+  xlab("Months in the Future")
+```
+
+We can see arima tends to have lower RMSE at many horizons, indicating more accurate predictions overall.\
+additive_prophet experiences a spike in mid-range horizons, suggesting difficulty capturing medium-term dynamics.\
+The naive model performs poorly initially but briefly improves around the 4–5 month mark before degrading again.
+
+```{r, warning=FALSE, message=FALSE}
+library(fpp3)
+library(lubridate)
+
+forecast_vs <- m8_fit %>% forecast(h = 12)
+
+
+plot_data <- vs %>% filter(date >= ymd("2010-01-01"))
+
+autoplot(forecast_vs, plot_data) +
+  labs(title = "Vehicle Sales Forecast using ARIMA",
+       y = "Vehicle Sales",
+       x = "Date")
+
+```
+
+#### Conclusion
+
+After conducting a thorough exploratory data analysis (EDA), model comparison, and validation, our forecasting results indicate that the ARIMA model delivers the best performance for predicting vehicle sales. Specifically:
+
+-   ARIMA Model: Achieved a MAPE of 9.82%, demonstrating superior accuracy.
+
+-   Naïve Model: Produced a MAPE of 13.70%.
+
+-   Meta Prophet Model: Resulted in a MAPE of 14.29%.
+
+Based on these metrics, the ARIMA model is clearly the most reliable for forecasting vehicle sales. Its lower MAPE indicates that it captures the underlying patterns and seasonality of the data more effectively than the other models. Consequently, we recommend using the ARIMA model for future vehicle sales forecasting, as it is expected to provide more accurate predictions to support informed business decision-making.
