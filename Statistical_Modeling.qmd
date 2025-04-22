@@ -1,0 +1,656 @@
+---
+title: "Stat Modeling Assignment"
+author: "Devansh Patel"
+format:
+   html:
+    code-fold: true
+    fig-format: png
+    fig-output: inline
+    embed-resources: true
+editor: visual
+---
+
+::: panel-tabset
+## Que 1
+
+Libraries
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(pdp)
+library(nnet)
+library(readr)
+library(ISLR2)
+library(corrplot)
+library(glmnet)
+library(MASS)
+library(effects)
+```
+
+**(a)**
+
+```{r}
+cases <- c(12, 14, 33, 50, 67, 74, 123, 141, 165, 204, 253, 246, 240, 246, 232) 
+year <- 1:15 + 1980
+df <- data.frame(year = year, cases = cases)
+#1a.
+plot(year, cases, type = "p", pch = 16, col = "blue",
+     xlab = "Year", ylab = "# of New AIDS Cases",
+     main = "New AIDS Cases per Year",
+     ylim = c(0, max(cases) * 1.2))
+grid()
+```
+
+**(b)**
+
+```{r, warning=FALSE, message=FALSE}
+poisson_model <- glm(cases ~ year, family = poisson)
+# Model
+df$fitted_cases <- predict(poisson_model, type = "response")
+
+# Plot
+ggplot(df, aes(x = year, y = cases)) +
+  geom_point(color = "blue", size = 2) +  # Scatter plot for actual cases
+  geom_line(aes(y = fitted_cases), color = "red", linewidth = 1) +  # Poisson fit
+  labs(title = "New AIDS Cases per Year with Poisson Regression Fit",
+       x = "Year", y = "# of New AIDS Cases") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center title
+  scale_y_continuous(limits = c(0, max(cases) * 1.2))
+```
+
+**(c)**
+
+```{r}
+par(mfrow = c(2, 2)) # set up 2x2 plotting grid
+plot(poisson_model, which = 1:4)
+```
+
+Things to improve the Model
+
+The residual vs. fitted plot may suggest adding a quadratic or spline term for Temperature (or reintroducing Pressure) to capture any curvature.
+
+High Cook’s distances imply certain flights heavily influence the model; verify data accuracy or consider additional predictors for those outliers.
+
+If the binomial assumption is violated (e.g., O‐rings on the same flight are correlated), a quasi‐binomial or mixed‐effects approach may be more appropriate.
+
+**(d)**
+
+```{r, , warning=FALSE, message=FALSE}
+#Poisson model
+quad_model <- glm(cases ~ year + I(year^2), family = poisson, data = df)
+
+df$quad_fitted <- predict(quad_model, type = "response")
+df$linear_fitted <- predict(poisson_model, type = "response")
+
+# Scatter plot
+ggplot(df, aes(x = year, y = cases)) +
+  geom_point(color = "blue", size = 1.5) +
+  geom_line(aes(y = linear_fitted), color = "red", linewidth = 1, linetype = "dashed") +
+  geom_line(aes(y = quad_fitted), color = "cyan", linewidth = 1.2) +
+  labs(title = "Comparison of Linear and Quadratic Poisson Regression",
+       x = "Year", y = "Number of New AIDS Cases") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  scale_y_continuous(limits = c(0, max(cases) * 1.2)) +
+  geom_text(aes(label=round(quad_fitted)), vjust=-0.5, color="cyan", size=3) +
+  geom_text(aes(label=round(linear_fitted)), vjust=1.5, color="red", size=3)
+
+```
+
+The quadratic Poisson model (cyan) tracks the observed AIDS case counts more closely than the simpler (linear) model (red dashed line). By including a year\^2 term, it can capture the curvature in the data—initial slower growth, then a steeper increase—whereas the purely linear model tends to under- or over-predict in early and later years. In short, the second-degree polynomial better fits the rise and leveling of cases over time, but at the cost of an additional parameter.
+
+**(e)**
+
+```{r}
+lrt_test <- anova(poisson_model, quad_model, test = "Chisq")
+
+print(lrt_test)
+```
+
+Null Hypothesis: The coefficient on the year\^2 term is zero, meaning the simpler (linear) model cases ∼ year is adequate.
+
+Alternative Hypothesis: The coefficient on the year term is not zero, meaning adding the quadratic term I(y\^2) significantly improves the model
+
+The residual deviance drops dramatically from 173.335 (linear model) to 9.245 (quadratic model).
+
+The difference in deviance is 164.09, which (with 1 degree of freedom) yields a p-value smaller than 2.2 \* 10\^(-16)
+
+Because the p-value is extremely small, we reject Null Hypothesis and conclude that the quadratic term provides a highly significant improvement over the simpler model.
+
+## Que 2
+
+```{r, warning=FALSE, message=FALSE}
+cereal <- read_csv("cereal.csv")
+```
+
+**(a)**
+
+```{r, warning=FALSE, message=FALSE}
+# Function to rescale a variable to be within (0, 1)
+stand01 <- function (x) {
+(x - min(x)) / (max(x) - min(x))
+}
+# Standardize and rescale data for analysis
+cereal2 <- data.frame(
+Shelf = cereal$Shelf,
+sugar = stand01(cereal$sugar_g / cereal$size_g),
+fat = stand01(cereal$fat_g / cereal$size_g),
+sodium = stand01(cereal$sodium_mg / cereal$size_g)
+)
+```
+
+**(b)**
+
+```{r}
+boxplot(sugar ~ Shelf, data = cereal2, ylab = "Sugar", xlab = "Shelf",
+pars = list(outpch = NA))
+stripchart(cereal2$sugar ~ cereal2$Shelf, lwd = 2, col = "red",
+method = "jitter", vertical = TRUE, pch = 1, add = TRUE)
+```
+
+Based on the boxplot of sugar content by shelf (from bottom = 1 to top = 4), there appear to be noticeable differences in sugar levels across shelves. In particular:
+
+-   Shelf 2 shows the highest median sugar content (around 0.7–0.8), with many cereals clustered toward higher sugar values.
+
+-   Shelf 3 shows the lowest median sugar content (around 0.3), suggesting cereals placed here tend to be lower in sugar.
+
+-   Shelves 1 and 4 fall in between, with Shelf 4’s median slightly higher than Shelf 1’s.
+
+These visual differences suggest that the store may be strategically placing higher-sugar cereals (often more appealing to children) at or near eye level (Shelf 2), while lower-sugar cereals may be placed elsewhere (e.g., Shelf 3). The boxplot points to clear trends in sugar content among shelves
+
+**(c)**
+
+We aim to consider ordinality when response levels (1, 2, 3, 4) follow a natural order (e.g., from “lowest” to “highest”) and exhibit a monotonic relationship, meaning that progressing from 1 to 2 to 3 to 4 reflects a consistent increase or decrease in the response.
+
+In the context of cereal shelves, although the shelves are physically arranged from bottom (1) to top (4), the statistical results do not show a strictly monotonic pattern in sugar content (e.g., Shelf 2 has the highest sugar content, while Shelf 3 has the lowest). Therefore, while shelf numbering is technically an ordinal variable, its effect on sugar content does not follow a clear increasing or decreasing trend. As a result, an ordinal model may not provide a better fit than a nominal approach.
+
+\(d\)
+
+Full Multinomial Model
+
+```{r}
+
+cereal2$Shelf <- factor(cereal2$Shelf)
+
+# Fit the full multinomial model
+mod_full <- multinom(Shelf ~ sugar + fat + sodium, data = cereal2)
+
+# Baseline deviance (smaller is better)
+baseline <- deviance(mod_full)
+baseline
+
+```
+
+Leave-One-Covariate-Out (LOCO) Analysis
+
+```{r}
+#  predictor variables used
+x.names <- c("sugar", "fat", "sodium")
+
+# fit a reduced model without one variable
+loco <- sapply(x.names, function(var) {
+  # Build a formula excluding 'var'
+  reduced_formula <- as.formula(
+    paste("Shelf ~", paste(setdiff(x.names, var), collapse = " + "))
+  )
+  
+  # reduced multinom model
+  mod_reduced <- multinom(reduced_formula, data = cereal2)
+  
+  # increase in deviance from the full model
+  deviance(mod_reduced) - baseline
+})
+
+# largest = most important
+names(loco) <- x.names
+sort(loco, decreasing = TRUE)
+
+```
+
+these numbers represent how much the model’s deviance increases when each variable is removed (one at a time) from the multinomial model. The larger the increase, the more important that variable is for predicting shelf placement.
+
+-   sodium: Removing it raises deviance by about 26.62 (largest increase)
+
+-   sugar: Removing it raises deviance by about 22.76 (second largest)
+
+-   fat: Removing it raises deviance by about 5.28 (smallest increase)
+
+Therefore, based on the LOCO metric, sodium is the most important predictor, followed by sugar, and finally fat
+
+**(e)**
+
+```{r}
+fit <- multinom(Shelf ~ sugar + fat + sodium, data = cereal2)
+```
+
+-   **Shelf 2 vs. Shelf 1**
+
+    Coefficient for sugar = +2.693071
+
+    A positive coefficient means as sugar increases, the log-odds of being on Shelf 2 (vs. Shelf 1) go up.
+
+    Interpreted practically: cereals with higher sugar content are more likely to appear on Shelf 2 than on Shelf 1, all else being equal.
+
+    **Shelf 3 vs. Shelf 1**
+
+    Coefficient for sugar = -12.216442
+
+    A negative coefficient means as sugar increases, the log-odds of being on Shelf 3 (vs. Shelf 1) go down.
+
+    Interpreted practically: cereals with higher sugar content are less likely to be placed on Shelf 3 than on Shelf 1.
+
+    **Shelf 4 vs. Shelf 1**
+
+    Coefficient for sugar = -11.393710
+
+    Also negative, though not quite as large in magnitude as Shelf 3’s.
+
+    Higher sugar cereals are less likely to be on Shelf 4 than on Shelf 1 (but not as strongly as for Shelf 3 vs. 1, given the somewhat smaller magnitude).
+
+```{r}
+
+pfun <- function(object, newdata) {
+  probs <- predict(object, newdata = newdata, type = "probs")
+  colMeans(probs)
+}
+
+# Partial dependence for 'sugar'
+pd <- partial(fit, pred.var = "sugar", pred.fun = pfun, plot = FALSE)
+
+# Plot
+lattice::xyplot(yhat ~ sugar | yhat.id, data = pd, type = "l",
+                ylab = "Probability",
+                xlab = "Sugar (standardized)")
+
+```
+
+Shelf 2 is strongly associated with higher sugar cereals.
+
+Shelf 3 is strongly associated with lower sugar cereals.
+
+Shelves 1 and 4 sit in the middle, with Shelf 4 leaning toward lower-moderate sugar, and Shelf 1 having a small rise at moderate sugar levels.
+
+This visualization confirms what the coefficients imply: the store’s shelf placement is not strictly linear from 1 to 4 in terms of sugar, but there is a clear distinction that Shelf 2 is where the high-sugar cereals end up, while Shelf 3 is where low-sugar cereals end up
+
+**(f)**
+
+```{r}
+# per-gram ratios in the original data
+sugar_ratio  <- cereal$sugar_g  / cereal$size_g
+fat_ratio    <- cereal$fat_g    / cereal$size_g
+sodium_ratio <- cereal$sodium_mg / cereal$size_g
+
+# same min & max used for scaling
+sugar_min  <- min(sugar_ratio)
+sugar_max  <- max(sugar_ratio)
+fat_min    <- min(fat_ratio)
+fat_max    <- max(fat_ratio)
+sodium_min <- min(sodium_ratio)
+sodium_max <- max(sodium_ratio)
+
+# Apple Jacks: per-gram ratios
+aj_sugar_ratio  <- 12   / 28
+aj_fat_ratio    <- 0.5  / 28
+aj_sodium_ratio <- 130  / 28
+
+# min–max scaling
+aj_sugar_scaled  <- (aj_sugar_ratio  - sugar_min)  / (sugar_max  - sugar_min)
+aj_fat_scaled    <- (aj_fat_ratio    - fat_min)    / (fat_max    - fat_min)
+aj_sodium_scaled <- (aj_sodium_ratio - sodium_min) / (sodium_max - sodium_min)
+
+# new data frame & predict shelf probabilities
+newdata_aj <- data.frame(
+  sugar  = aj_sugar_scaled,
+  fat    = aj_fat_scaled,
+  sodium = aj_sodium_scaled
+)
+
+# predicted probabilities for each shelf
+predict(fit, newdata = newdata_aj, type = "probs")
+
+```
+
+The predicted shelf probabilities for Apple Jacks are:
+
+-   Shelf 1: 0.053 (5.3%)
+
+-   Shelf 2: 0.472 (47.2%)
+
+-   Shelf 3: 0.200 (20.0%)
+
+-   Shelf 4: 0.274 (27.4%)
+
+Hence, Apple Jacks is most likely to be on Shelf 2
+
+**(g)**\
+
+Shelf 2 appears to hold the highest-sugar cereals (e.g., Apple Jacks) and thus is the most appealing to children, making it the most beneficial shelf for targeting that demographic.
+
+## Que 3
+
+**(a)**
+
+Logistic regression for binary outcomes assumes that each trial (in this case, each O‐ring) is an independent observation. This assumption is critical because:
+
+-   **Likelihood Specification:** The model’s likelihood function is built on the idea that the probability of failure for each O‐ring is determined independently by the explanatory variables. If O‐ring failures on the same flight are correlated, the binomial model (summing independent Bernoulli trials) may be mis-specified.
+
+-   **Standard Errors and Inference:** Independence ensures that standard errors are accurately estimated. If the failures are correlated—say, due to shared environmental conditions or common manufacturing issues—the variability in the data may be underestimated, leading to overly optimistic confidence intervals and an increased risk of Type I errors (false positives).
+
+-   **Clustering Effects:** On a given flight, all O‐rings are subjected to the same temperature and pressure. Any unobserved factors affecting a flight could make failures more likely to occur in clusters rather than as independent events. This clustering can distort the estimated relationship between the predictors (temperature and pressure) and the probability of failure.
+
+A subsequent analysis addressed these concerns by accounting for the potential dependence among O‐rings on the same flight—likely by modeling the within-flight correlation or using methods robust to overdispersion—thus providing more reliable inference about the effect of temperature (and pressure) on O‐ring failure.
+
+**(b)**
+
+```{r}
+challenger <- read_csv("challenger.csv")
+fit <- glm(cbind(O.ring, Number - O.ring) ~ Temp + Pressure, 
+           family = binomial, data = challenger)
+
+```
+
+**(c)**
+
+```{r}
+# full model including Temp and Pressure
+full_model <- glm(cbind(O.ring, Number - O.ring) ~ Temp + Pressure, 
+                  family = binomial, data = challenger)
+
+# reduced model with Temp only (dropping Pressure)
+reduced_model <- glm(cbind(O.ring, Number - O.ring) ~ Temp, 
+                     family = binomial, data = challenger)
+
+# likelihood ratio test comparing the reduced and full models
+lr_test <- anova(reduced_model, full_model, test = "Chisq")
+print(lr_test)
+
+```
+
+-   **Null hypothesis**: The coefficient on Pressure is 0 (i.e., Pressure does not improve the model beyond Temp alone).
+
+-   **Alternative hypothesis**: The coefficient on Pressure is not 0 (i.e., Pressure does improve the model).
+
+    Since the p-value =0.2145 is greater than alpha = 0.10, we fail to reject the null hypothesis. In other words, at the 10% significance level, we do not have sufficient evidence to conclude that Pressure significantly improves the model once Temp is already included.
+
+Based on this test, **Pressure can be dropped from the model** (i.e., the simpler model with Temp alone is statistically adequate at the α=0.10\alpha = 0.10α=0.10 level). This does **not** necessarily mean that Pressure is entirely unimportant from an engineering perspective, but statistically, given these data and this significance level, there is insufficient evidence to conclude it provides additional explanatory power beyond Temp alone.
+
+**(d)**
+
+The authors likely removed Pressure because the LRT showed no statistically significant improvement in model fit, and they preferred a simpler model. However, one should keep in mind potential issues such as omitted variable bias or domain knowledge indicating that Pressure could be relevant, especially if the dataset is small or the variables are correlated.
+
+**(e)**
+
+```{r}
+fit_temp <- glm(cbind(O.ring, Number - O.ring) ~ Temp, 
+                family = binomial, data = challenger)
+
+```
+
+```{r}
+# data frame with Temp = 31
+new_data <- data.frame(Temp = 31)
+
+# predicted probability
+pred_31 <- predict(fit_temp, newdata = new_data, type = "response")
+pred_31
+
+```
+
+The estimated probability of an O-ring failure at 31 °F is 0.8177744
+
+**(f)**
+
+```{r}
+fit_temp_probit <- glm(cbind(O.ring, Number - O.ring) ~ Temp, 
+                       family = binomial(link = "probit"), 
+                       data = challenger)
+
+# Predicted probability at 31 F
+predict(fit_temp_probit, data.frame(Temp = 31), type = "response")
+
+```
+
+Hence the probability change using a probit link function is 0.6964991
+
+## Que 4
+
+### Introduction
+
+This analysis aims to determine the factors affecting bike rentals and extract actionable insights. The dataset includes rental counts (bikers) along with explanatory variables such as temperature, working day status, weather conditions, month, and hour of the day.
+
+### Data set overview
+
+The dataset comprises the following key variables:
+
+-   **bikers**: The number of bike rentals (response variable).
+
+-   **workday**: Indicates whether it is a working day (1 = Yes, 0 = No).
+
+-   **temp**: Temperature in Celsius.
+
+-   **weathersit**: Weather condition (1 = Clear, 2 = Mist, 3 = Light Snow/Rain).
+
+-   **mnth**: Month of the year.
+
+-   **hr**: Hour of the day
+
+### EDA
+
+```{r}
+bikedf <- ISLR2::Bikeshare
+summary(bikedf)
+```
+
+We are concerned about workingday, temp, weathersit, mnth, and hr variable for this analysis
+
+```{r}
+hist(bikedf$bikers, 
+     main = "Distribution of Bike Rentals", 
+     xlab = "Number of Bike Rentals", 
+     col  = "cyan", 
+     breaks = 30)
+
+```
+
+-   The distribution of bike rentals is right-skewed, meaning most rental counts are relatively low, but some instances show significantly high demand.
+
+-   This suggests that a Poisson or Negative Binomial model would be more appropriate for predicting bike rentals rather than a normal distribution.
+
+```{r}
+barplot(table(bikedf$weathersit), 
+        main = "Weather Situations", 
+        col  = "cyan")
+```
+
+-   The majority of bike rentals occur under clear weather conditions, followed by cloudy/misty weather.
+
+-   Rentals drop significantly in light rain/snow, and almost no rentals occur in heavy rain/snow, indicating that weather plays a crucial role in bike usage.
+
+```{r}
+
+mod_lin <- lm(bikers ~ temp, data = bikedf)
+
+
+plot(bikedf$temp, bikedf$bikers, 
+     xlab = "Temperature", 
+     ylab = "Bike Rentals", 
+     main = "Temperature vs. Bike Rentals",
+     pch = 19, col = "cyan")
+
+# 3. Add the regression line in red
+abline(mod_lin, col = "red", lwd = 2)
+
+```
+
+-   There is a positive correlation between temperature and bike rentals, meaning more people rent bikes when temperatures are warmer.
+
+-   The regression line suggests an increasing trend, but variability exists, indicating that other factors (e.g., time of day, weather conditions) may also influence rentals
+
+```{r}
+barplot(table(bikedf$hr),
+        main="Hour of Day Distribution",
+        xlab="Hour",
+        ylab="Count",
+        col="cyan")
+
+```
+
+```{r}
+barplot(table(bikedf$mnth),
+        main="Monthly Distribution of Records",
+        xlab="Month",
+        ylab="Count",
+        col="cyan")
+
+```
+
+```{r}
+#Poisson Regression Model
+poisson_model <- glm(bikers ~ workingday + temp + weathersit + mnth + hr, 
+                     family = poisson(link = "log"), 
+                     data = bikedf)
+
+```
+
+```{r}
+# Pearson chi-square
+pearson_chi_sq <- sum(residuals(poisson_model, type = "pearson")^2)
+df_resid <- df.residual(poisson_model)
+overdisp_ratio <- pearson_chi_sq / df_resid
+overdisp_ratio
+
+
+```
+
+An overdispersion ratio of about 25.6 is very high, indicating that your data vary far more than a standard Poisson model can handle. In other words, the Poisson assumption that Var(Y)=E\[Y\] is badly violated.
+
+```{r}
+nb_mod <- glm.nb(
+  bikers ~ workingday + temp + weathersit + mnth + hr,
+  data = bikedf
+)
+
+summary(nb_mod)
+
+```
+
+### Comparing AIC
+
+```{r}
+AIC(poisson_model, nb_mod)
+```
+
+A huge drop in AIC (from \~281,159 to \~89,491) strongly indicates that the negative binomial model nb_mod is a much better fit for your data than the Poisson model. This aligns with the earlier finding of severe overdispersion in the Poisson model.
+
+**Brief interpretation**
+
+-   Working days boost rentals (likely commuter traffic).
+
+-   Warmer temperatures strongly increase ridership.
+
+-   Poor weather (rain/snow) significantly reduces rentals.
+
+-   Certain months (depending on your data’s location/seasonality) see fewer rentals than January in this model.
+
+-   Rush hours (e.g., 8–9 AM, 5–7 PM) show the largest increases over midnight.
+
+These results make intuitive sense for a bike‐sharing system: People ride more in warm, clear weather, often around commute hours and working days.
+
+```{r}
+plot(
+  effect("temp", nb_mod),     
+  type = "response",  
+  rug = TRUE,                     
+  main = "Effect of Temperature on Bike Rentals",
+  xlab = "Temperature (normalized or °C)",
+  ylab = "Predicted Number of Bikers"
+)
+```
+
+As temperature increases, the predicted number of bikers rises steeply. This indicates that warmer conditions strongly encourage bike usage, with very high rental counts at the upper end of the temperature range.
+
+```{r}
+plot(
+  effect("hr", nb_mod),
+  type = "response",
+  main = "Effect of Hour on Bike Rentals",
+  xlab = "Hour of Day",
+  ylab = "Predicted Number of Bikers"
+)
+```
+
+Rentals are very low overnight, start to rise in the early morning, and reach a notable peak around typical commuting hours (7–8 AM). There is another, even higher peak in the late afternoon or early evening (around 5–6 PM), followed by a decline later at night.
+
+```{r}
+plot(
+  effect("workingday", nb_mod),
+  type = "response",
+  main = "Effect of Working Day on Bike Rentals",
+  xlab = "Working Day (No/Yes)",
+  ylab = "Predicted Number of Bikers"
+)
+```
+
+Here, going from 0 (non‐working day) to 1 (working day) decreases predicted rentals. This implies that, in this dataset, people tend to rent bikes more often on non‐working days (possibly for leisure) than on regular workdays.
+
+```{r}
+plot(
+  effect("weathersit", nb_mod),
+  type = "response",
+  main = "Effect of Weather Conditions on Bike Rentals",
+  xlab = "Weather Condition",
+  ylab = "Predicted Number of Bikers"
+)
+```
+
+Clear weather supports the highest rental counts, while light rain or snow already cuts ridership substantially. Heavy rain or snow causes a dramatic drop, indicating that poor weather strongly deters riders. Cloudy or misty conditions lie in between these extremes.
+
+```{r}
+plot(
+  effect("mnth", nb_mod),
+  type = "response",
+  main = "Effect of Month on Bike Rentals",
+  xlab = "Month",
+  ylab = "Predicted Number of Bikers"
+)
+```
+
+Bike usage is at its lowest in January and February, then steadily rises through the spring. It peaks around mid‐summer (June–July) before tapering off in the fall. This pattern suggests strong seasonality, with warm‐season months driving higher ridership.
+
+### Recommendations for the Bike Rental Agency
+
+1.  Promote Rentals During Peak Hours & Seasons
+
+    -   Offer discounts or special promotions during the morning (7–9 AM) and evening (5–7 PM) commute hours to capitalize on higher demand.
+
+    -   Consider seasonal pricing, with higher rates during peak months (May–September) and discounts in winter to encourage ridership in colder seasons.
+
+2.  Introduce Weather‐Responsive Pricing & Services
+
+    -   Provide dynamic pricing or discounts on days with light rain/misty conditions when rentals tend to drop.
+
+    -   Supply rain gear or bike covers at kiosks to reduce the deterrent effect of uncertain weather.
+
+3.  Leverage Weekends for Leisure Riders
+
+    -   Since non‐working days often see higher usage, create weekend subscription plans or special events to attract casual and leisure riders.
+
+    -   Focus marketing on family outings or group rides on weekends.
+
+4.  Expand Marketing During Warmer Months
+
+    -   Launch aggressive marketing campaigns in spring and summer when ridership naturally peaks.
+
+    -   Highlight outdoor activities and scenic routes to appeal to tourists and local enthusiasts.
+
+5.  Optimize Bike Availability Based on Demand Patterns
+
+    -   Ensure sufficient bikes are stocked at popular stations during commuting hours (morning and evening peaks).
+
+    -   Dynamically redistribute bikes throughout the day to match real‐time demand and minimize shortages or surpluses.
+
+### Conclusion
+
+The negative binomial analysis shows that temperature, time of day, weather conditions, and seasonality significantly influence bike rental demand. By tailoring pricing, promotions, and inventory to these patterns—offering deals in off‐peak hours or poor weather, and ensuring high availability during peak hours and warmer seasons—the bike rental agency can maximize rentals and enhance customer satisfaction.
+:::
